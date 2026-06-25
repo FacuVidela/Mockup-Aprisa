@@ -6579,7 +6579,8 @@ function CampaignPip({ onGoToFinal }) {
   const [convoStep, setConvoStep] = React.useState(0);    // avanza la conversación
   const [crmStage, setCrmStage] = React.useState(0);      // 0 oculto · 1 Nuevo · 3 Aprobado
   const [typing, setTyping] = React.useState(false);
-  const [showApproval, setShowApproval] = React.useState(false);  // popup de calificación (tabla de montos)
+  const [showApproval, setShowApproval] = React.useState(false);  // popup CUAD (disponible máx + cuota máx)
+  const [showSimulador, setShowSimulador] = React.useState(false); // popup Simulador (tabla de montos y cuotas)
   const [completarBtn, setCompletarBtn] = React.useState(false);  // botón "Completar" en el CRM
   const [ofertaModal, setOfertaModal] = React.useState(false);    // modal datos de la oferta
   const [ofertaFilled, setOfertaFilled] = React.useState(false);  // campos completados
@@ -6588,10 +6589,16 @@ function CampaignPip({ onGoToFinal }) {
   const [focusTarget, setFocusTarget] = React.useState('none');   // 'none' | 'crm' | 'wa'
   const [docsModal, setDocsModal] = React.useState(false);        // modal carga de documentos
   const [docsLoadedCount, setDocsLoadedCount] = React.useState(0); // cuántos docs cargados (0-4)
+  const [paused, setPaused] = React.useState(false);              // animación pausada (esperando click)
+  const resumeRef = React.useRef(null);                           // fn para reanudar desde la pausa
   const scrollRef = React.useRef(null);
+  const chatBottomRef = React.useRef(null); // ancla fija al fondo del chat
   const isMobile = useIsMobile();
   const waRef = React.useRef(null);    // marco del teléfono (WhatsApp)
   const crmRef = React.useRef(null);   // tarjeta del CRM
+
+  // Sin scroll programático: el contenedor de chat usa flex column-reverse,
+  // por lo que scrollTop=0 siempre muestra el fondo (mensajes más recientes) sin intervención JS.
 
   const green = '#005B44';
   const DNI_FIJO = '39555450';
@@ -6610,19 +6617,22 @@ function CampaignPip({ onGoToFinal }) {
   const volverInstagram = () => {
     setPhase('instagram');
     setConvoStep(0); setCrmStage(0); setTyping(false); setFocusTarget('none');
-    setShowApproval(false); setCompletarBtn(false); setOfertaModal(false); setOfertaFilled(false); setShowSuccess(false); setCompletado(false);
-    setDocsModal(false); setDocsLoadedCount(0);
+    setShowApproval(false); setShowSimulador(false); setCompletarBtn(false); setOfertaModal(false); setOfertaFilled(false); setShowSuccess(false); setCompletado(false);
+    setDocsModal(false); setDocsLoadedCount(0); setPaused(false); resumeRef.current = null;
   };
 
-  // Conversación automática — el cliente responde solo
+  // Conversación automática — el cliente responde solo.
+  // Se ejecuta como una secuencia de pasos; algunos pasos marcan una PAUSA:
+  // la animación se detiene y se reanuda al hacer click en cualquier lugar.
   React.useEffect(() => {
     if (phase !== 'whatsapp') return;
     setConvoStep(0); setCrmStage(0); setTyping(false); setFocusTarget('none');
-    setShowApproval(false); setCompletarBtn(false); setOfertaModal(false); setOfertaFilled(false); setShowSuccess(false); setCompletado(false);
-    setDocsModal(false); setDocsLoadedCount(0);
-    const timers = [];
-    let at = 0;
-    const seq = (gap, fn) => { at += gap; timers.push(setTimeout(fn, at)); };
+    setShowApproval(false); setShowSimulador(false); setCompletarBtn(false); setOfertaModal(false); setOfertaFilled(false); setShowSuccess(false); setCompletado(false);
+    setDocsModal(false); setDocsLoadedCount(0); setPaused(false);
+
+    const steps = [];
+    const seq = (gap, fn) => steps.push({ gap, fn });
+    const pause = () => steps.push({ pause: true });
 
     seq(800,  () => setConvoStep(1));                               // usuario: quiero un préstamo
     seq(900,  () => setTyping(true));
@@ -6634,17 +6644,23 @@ function CampaignPip({ onGoToFinal }) {
     seq(900,  () => setTyping(true));
     seq(1600, () => setConvoStep(6));                               // bot: asesor se comunicará
     seq(900,  () => setTyping(false));
+    pause();                                                        // ⏸ PAUSA 1: datos iniciales listos, antes del CRM
     seq(2600, () => { setCrmStage(1); setFocusTarget('crm'); });   // +2s después arranca el CRM (lead vuela / cargando)
     seq(3000, () => setCrmStage(2));                               // CRM termina de cargar → lead Nuevo
-    seq(1800, () => setShowApproval(true));                         // popup: aprueba + tabla de montos
-    seq(4000, () => setShowApproval(false));                       // tabla visible 4s y se saca
+    seq(1800, () => setShowApproval(true));                         // popup CUAD: disponible máx + cuota máx
+    pause();                                                        // ⏸ PAUSA 2: popup CUAD visible
+    seq(600,  () => { setShowApproval(false); setShowSimulador(true); }); // → Simulador con tabla de montos/cuotas
+    pause();                                                        // ⏸ PAUSA 3: popup Simulador visible
+    seq(600,  () => setShowSimulador(false));                      // se cierra el simulador
     seq(1000, () => { setFocusTarget('wa'); setTyping(true); });
     seq(1600, () => { setTyping(false); setConvoStep(7); });        // Dana: CUAD opciones + ¿cuál te interesa?
     seq(4500, () => setConvoStep(8));                              // usuario elige: $1.000.000 en 12 cuotas
+    pause();                                                        // ⏸ PAUSA 4: cliente respondió que sí, antes de volver al CRM
     seq(1500, () => { setCompletarBtn(true); setFocusTarget('crm'); }); // foco al CRM → botón Completar
     seq(1600, () => setOfertaModal(true));                         // Dana presiona Completar → modal sobre el CRM
     seq(2500, () => setOfertaFilled(true));                        // campos se completan (se aprecia)
-    seq(2900, () => { setOfertaModal(false); setCrmStage(3); setCompletado(true); setDocsModal(true); }); // Guardar → abre modal de docs
+    pause();                                                        // ⏸ PAUSA 5: datos completos y visibles en pantalla
+    seq(900,  () => { setOfertaModal(false); setCrmStage(3); setCompletado(true); setDocsModal(true); }); // Guardar → abre modal de docs
     seq(1400, () => setDocsLoadedCount(1));                        // doc 1 cargado
     seq(700,  () => setDocsLoadedCount(2));                        // doc 2 cargado
     seq(700,  () => setDocsLoadedCount(3));                        // doc 3 cargado
@@ -6654,18 +6670,39 @@ function CampaignPip({ onGoToFinal }) {
     seq(300,  () => setFocusTarget('none'));                       // celular y CRM igual de visibles
     seq(400,  () => setTyping(true));
     seq(1600, () => { setTyping(false); setConvoStep(9); });        // Dana: link a la solicitud
-    return () => timers.forEach(clearTimeout);
+
+    let i = 0;
+    let timer = null;
+    const run = () => {
+      if (i >= steps.length) return;
+      const step = steps[i++];
+      if (step.pause) {
+        setPaused(true);
+        resumeRef.current = () => { resumeRef.current = null; setPaused(false); run(); };
+        return;
+      }
+      timer = setTimeout(() => { step.fn(); run(); }, step.gap);
+    };
+    run();
+
+    return () => { if (timer) clearTimeout(timer); resumeRef.current = null; };
   }, [phase]);
 
+  // Reanudar la animación al hacer click en cualquier parte mientras está pausada
   React.useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [convoStep, typing, showApproval, crmStage, completarBtn, ofertaModal, docsModal, docsLoadedCount, showSuccess, focusTarget]);
+    if (!paused) return;
+    const onClick = () => { if (resumeRef.current) resumeRef.current(); };
+    document.addEventListener('click', onClick);
+    return () => document.removeEventListener('click', onClick);
+  }, [paused]);
+
+  // (scroll manejado por ResizeObserver + MutationObserver — ver arriba)
 
   // En mobile: centrar en pantalla el elemento activo a medida que avanza la animación.
   // (Los modales se centran solos vía portal, así que ahí no scrolleamos.)
   React.useEffect(() => {
     if (!isMobile) return;
-    if (ofertaModal || docsModal || showApproval) return;
+    if (ofertaModal || docsModal || showApproval || showSimulador) return;
     let el = null;
     if (focusTarget === 'crm' && crmRef.current) el = crmRef.current;
     else if (focusTarget === 'wa' && waRef.current) el = waRef.current;
@@ -6675,7 +6712,7 @@ function CampaignPip({ onGoToFinal }) {
       }, 80);
       return () => clearTimeout(t);
     }
-  }, [isMobile, focusTarget, crmStage, completarBtn, ofertaModal, showApproval]);
+  }, [isMobile, focusTarget, crmStage, completarBtn, ofertaModal, showApproval, showSimulador]);
 
   // ---- Burbujas ----
   const Bubble = ({ side, children, name, nameColor, time }) => (
@@ -6825,6 +6862,22 @@ function CampaignPip({ onGoToFinal }) {
       display: 'flex', flexDirection: 'column', alignItems: 'center',
       padding: '28px 16px 40px', fontFamily: "'Plus Jakarta Sans', sans-serif",
     }}>
+      {/* Indicador de pausa — la animación espera un click para continuar */}
+      {paused && (
+        <div style={{
+          position: 'fixed', bottom: 26, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 99999, display: 'flex', alignItems: 'center', gap: 10,
+          background: '#14401C', color: '#fff', padding: '12px 22px', borderRadius: 999,
+          boxShadow: '0 12px 32px rgba(0,0,0,0.30)', fontWeight: 800, fontSize: 14,
+          animation: 'pip-bounce 1.3s ease-in-out infinite', pointerEvents: 'none',
+        }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F5C518" strokeWidth="2.4">
+            <path d="M9 11.5V5.5a1.5 1.5 0 0 1 3 0V11m0-1a1.5 1.5 0 0 1 3 0v1m0 0a1.5 1.5 0 0 1 3 0v3.5a5.5 5.5 0 0 1-5.5 5.5h-2a4 4 0 0 1-3.2-1.6l-2.3-3a1.5 1.5 0 0 1 2.2-2l1.3 1.3"/>
+          </svg>
+          Tocá la pantalla para continuar
+        </div>
+      )}
+
       <div style={{ textAlign: 'center', marginBottom: 22 }}>
         <div style={{ fontSize: 13, fontWeight: 800, color: green, letterSpacing: '1.2px', textTransform: 'uppercase' }}>
           Inicio Cliente · Campaña · PIP
@@ -6987,48 +7040,39 @@ function CampaignPip({ onGoToFinal }) {
             <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff" stroke="none"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
           </div>
 
-          {/* WA chat body */}
+          {/* WA chat body — column-reverse: scrollTop=0 siempre muestra el fondo (último mensaje).
+               Orden JSX invertido: el primer hijo es el más nuevo y aparece abajo. */}
           <div ref={scrollRef} style={{
             flex: 1, overflowY: 'auto', padding: '14px 12px',
+            display: 'flex', flexDirection: 'column-reverse',
             background: '#ECE5DD',
             backgroundImage: 'radial-gradient(rgba(255,255,255,0.4) 1px, transparent 1px)',
             backgroundSize: '18px 18px',
           }}>
-            <div style={{ textAlign: 'center', marginBottom: 14 }}>
-              <span style={{ background: '#FCF4CB', color: '#54656f', fontSize: 11, fontWeight: 600, padding: '5px 11px', borderRadius: 7 }}>
-                🔒 Mensajes cifrados de extremo a extremo
-              </span>
-            </div>
+            {/* NEWEST → OLDEST (abajo → arriba en pantalla) */}
+            {typing && <Typing />}
 
-            {convoStep >= 1 && (
-              <Bubble side="user" time="11:02 ">Hola, quiero solicitar un préstamo 🙌</Bubble>
-            )}
-
-            {convoStep >= 2 && (
-              <Bubble side="bot" name="🤖 Asistente Aprisa" nameColor={green} time="11:02 ">
-                ¡Hola, <b>Adrián</b>! 👋 Bienvenido/a a <b>Aprisa</b>. Con gusto te ayudo a iniciar tu solicitud.<br /><br />
-                Para empezar, contame: <b>¿sos empleado/a público/a?</b>
+            {convoStep >= 9 && (
+              <Bubble side="bot" name="👩‍💼 Dana · Asesora Aprisa" nameColor="#1F6B2A" time="11:11 ">
+                ¡Excelente! 🎉 Completá tu solicitud en el siguiente link 👉<br />
+                <a href="#" onClick={e => { e.preventDefault(); onGoToFinal && onGoToFinal(); }}
+                   style={{ color: '#027eb5', fontWeight: 700, wordBreak: 'break-all', textDecoration: 'underline', cursor: 'pointer' }}>
+                  https://solicitud.aprisa.ar
+                </a>
+                <div onClick={() => onGoToFinal && onGoToFinal()} style={{
+                  marginTop: 9, display: 'inline-flex', alignItems: 'center', gap: 7,
+                  background: '#005B44', color: '#fff', padding: '7px 13px', borderRadius: 999,
+                  fontSize: 12.5, fontWeight: 800, cursor: 'pointer', boxShadow: '0 3px 10px rgba(0,91,68,0.35)',
+                  animation: 'pip-nudge 1s ease-in-out infinite',
+                }}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.3"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+                  Tocá el link para continuar
+                </div>
               </Bubble>
             )}
 
-            {convoStep >= 3 && (
-              <Bubble side="user" time="11:03 ">Sí</Bubble>
-            )}
-
-            {convoStep >= 4 && (
-              <Bubble side="bot" name="🤖 Asistente Aprisa" nameColor={green} time="11:03 ">
-                ¡Genial! 🎉 Pasame tu <b>DNI (sin puntos)</b> para verificar si podés acceder.
-              </Bubble>
-            )}
-
-            {convoStep >= 5 && (
-              <Bubble side="user" time="11:04 ">{DNI_FIJO}</Bubble>
-            )}
-
-            {convoStep >= 6 && (
-              <Bubble side="bot" name="🤖 Asistente Aprisa" nameColor={green} time="11:05 ">
-                ¡Listo! 🙌 Recibimos todos tus datos. En unos minutos un <b>asesor</b> se comunicará con vos. ⏳
-              </Bubble>
+            {convoStep >= 8 && (
+              <Bubble side="user" time="11:11 ">La de $1.000.000 en 12 cuotas de $200.000 💪</Bubble>
             )}
 
             {convoStep >= 7 && (
@@ -7044,31 +7088,43 @@ function CampaignPip({ onGoToFinal }) {
               </Bubble>
             )}
 
-            {convoStep >= 8 && (
-              <Bubble side="user" time="11:11 ">La de $1.000.000 en 12 cuotas de $200.000 💪</Bubble>
-            )}
-
-            {convoStep >= 9 && (
-              <Bubble side="bot" name="👩‍💼 Dana · Asesora Aprisa" nameColor="#1F6B2A" time="11:11 ">
-                ¡Excelente! 🎉 Completá tu solicitud en el siguiente link 👉<br />
-                <a href="#" onClick={e => { e.preventDefault(); onGoToFinal && onGoToFinal(); }}
-                   style={{ color: '#027eb5', fontWeight: 700, wordBreak: 'break-all', textDecoration: 'underline', cursor: 'pointer' }}>
-                  https://solicitud.aprisa.ar
-                </a>
-                {/* Flecha "tocá aquí" */}
-                <div onClick={() => onGoToFinal && onGoToFinal()} style={{
-                  marginTop: 9, display: 'inline-flex', alignItems: 'center', gap: 7,
-                  background: '#005B44', color: '#fff', padding: '7px 13px', borderRadius: 999,
-                  fontSize: 12.5, fontWeight: 800, cursor: 'pointer', boxShadow: '0 3px 10px rgba(0,91,68,0.35)',
-                  animation: 'pip-nudge 1s ease-in-out infinite',
-                }}>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.3"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-                  Tocá el link para continuar
-                </div>
+            {convoStep >= 6 && (
+              <Bubble side="bot" name="🤖 Asistente Aprisa" nameColor={green} time="11:05 ">
+                ¡Listo! 🙌 Recibimos todos tus datos. En unos minutos un <b>asesor</b> se comunicará con vos. ⏳
               </Bubble>
             )}
 
-            {typing && <Typing />}
+            {convoStep >= 5 && (
+              <Bubble side="user" time="11:04 ">{DNI_FIJO}</Bubble>
+            )}
+
+            {convoStep >= 4 && (
+              <Bubble side="bot" name="🤖 Asistente Aprisa" nameColor={green} time="11:03 ">
+                ¡Genial! 🎉 Pasame tu <b>DNI (sin puntos)</b> para verificar si podés acceder.
+              </Bubble>
+            )}
+
+            {convoStep >= 3 && (
+              <Bubble side="user" time="11:03 ">Sí</Bubble>
+            )}
+
+            {convoStep >= 2 && (
+              <Bubble side="bot" name="🤖 Asistente Aprisa" nameColor={green} time="11:02 ">
+                ¡Hola, <b>Adrián</b>! 👋 Bienvenido/a a <b>Aprisa</b>. Con gusto te ayudo a iniciar tu solicitud.<br /><br />
+                Para empezar, contame: <b>¿sos empleado/a público/a?</b>
+              </Bubble>
+            )}
+
+            {convoStep >= 1 && (
+              <Bubble side="user" time="11:02 ">Hola, quiero solicitar un préstamo 🙌</Bubble>
+            )}
+
+            {/* Este elemento queda arriba (es el último en column-reverse) */}
+            <div style={{ textAlign: 'center', marginBottom: 14 }}>
+              <span style={{ background: '#FCF4CB', color: '#54656f', fontSize: 11, fontWeight: 600, padding: '5px 11px', borderRadius: 7 }}>
+                🔒 Mensajes cifrados de extremo a extremo
+              </span>
+            </div>
           </div>
 
           {/* WA input bar */}
@@ -7131,6 +7187,34 @@ function CampaignPip({ onGoToFinal }) {
             <div style={{ background: '#1A2B4A', padding: '20px 24px 16px', textAlign: 'center' }}>
               <div style={{ fontSize: 32, fontWeight: 900, letterSpacing: '-1px', color: '#fff' }}>CUAD</div>
               <div style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.6)', letterSpacing: '1.5px', textTransform: 'uppercase', marginTop: 3 }}>Cuadro de alternativas disponibles</div>
+            </div>
+            <div style={{ padding: '22px 22px 24px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                <div style={{ border: '1px solid #E3E8EF', borderRadius: 14, background: '#F4FBF7', padding: '18px 16px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 800, color: '#1A6FB5', textTransform: 'uppercase', letterSpacing: '.6px' }}>Disponible máximo</div>
+                  <div style={{ fontSize: 30, fontWeight: 900, color: '#005B44', letterSpacing: '-1px', marginTop: 8, fontVariantNumeric: 'tabular-nums' }}>$ 1.500.000</div>
+                </div>
+                <div style={{ border: '1px solid #E3E8EF', borderRadius: 14, background: '#F7F9FC', padding: '18px 16px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 800, color: '#1A6FB5', textTransform: 'uppercase', letterSpacing: '.6px' }}>Cuota máxima</div>
+                  <div style={{ fontSize: 30, fontWeight: 900, color: '#1A2B4A', letterSpacing: '-1px', marginTop: 8, fontVariantNumeric: 'tabular-nums' }}>$ 300.000</div>
+                </div>
+              </div>
+              <div style={{ marginTop: 16, textAlign: 'center', fontSize: 12, color: '#8b97a3', fontWeight: 500 }}>
+                Cupo aprobado · sujeto a la política crediticia vigente
+              </div>
+            </div>
+          </div>
+        </div>
+      ), document.body)}
+
+      {/* ===== POPUP SIMULADOR (tabla de montos y cuotas) ===== */}
+      {showSimulador && ReactDOM.createPortal((
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,25,35,0.6)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div style={{ background: '#fff', borderRadius: 18, maxWidth: 480, width: '100%', overflow: 'hidden', animation: 'pip-pop .3s ease-out', boxShadow: '0 30px 80px -20px rgba(0,0,0,0.5)', fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+            {/* Banda superior */}
+            <div style={{ background: '#005B44', padding: '20px 24px 16px', textAlign: 'center' }}>
+              <div style={{ fontSize: 26, fontWeight: 900, letterSpacing: '-0.5px', color: '#fff' }}>Simulador</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.7)', letterSpacing: '1.5px', textTransform: 'uppercase', marginTop: 3 }}>Opciones de financiación</div>
             </div>
             <div style={{ padding: '18px 22px' }}>
               <div style={{ border: '1px solid #E3E8EF', borderRadius: 12, overflow: 'hidden' }}>
